@@ -1,0 +1,44 @@
+name: Application Build CI
+on: 
+  workflow_dispatch
+  push:
+    branches:
+      - main
+jobs: 
+  Build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+      - name: Install Conda
+        uses: conda-incubator/setup-miniconda@v3
+        with:
+          auto-activate: true
+      - name: Setting up Conda environment
+        run: |
+          conda env create -f environment.yml
+          conda activate heytea_env
+      - name: Install pyinstaller to pack application. 
+        run: | 
+          conda install pyinstaller -y
+      - name: Build Application
+        run: |
+          pyinstaller --onefile -w --name heytea_app heytea_modern.py 
+      # Generate checksum
+      - name: Generate checksum
+        run: |
+          sha256sum dist/* > dist/heytea_app_build_checksum.txt
+      - name: Upload Build Artifact
+        uses: actions/upload-artifact@v3
+        with:
+          name: heytea_app_build.zip
+          path: |
+            dist/*
+      # Release Step (Commented Out), set up your TOKEN secret and uncomment to enable
+      # - name: Create Release.
+      #   uses: softprops/action-gh-release@v2
+      #   with:
+      #     files: |
+      #       ./dist/*
+      #     draft: true
+      #     token: ${{ secrets.TOKEN }}
