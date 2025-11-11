@@ -1,10 +1,10 @@
 # Heytea-Painter
 Automatically add drawing elements by extracting edges.  
   ****
-一键启动包v1（建议）：  
+一键启动包v2(修复了不同分辨率以及DPI情况下的绘画问题)：  
+https://pan.quark.cn/s/cb2575e3590a  
+一键启动包v1：  
 https://pan.quark.cn/s/b90824f581b1  
-一键启动包v2(最新测试中)：  
-https://pan.quark.cn/s/6ae181319749  
 # 使用方法：
   ****
 建议在系统DPI缩放100%的情况下使用，高DPI缩放会导致程序绘画区域不能完全覆盖画布  
