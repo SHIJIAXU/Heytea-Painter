@@ -17,7 +17,7 @@ pydirectinput.PAUSE = 0.005
 
 # --- DPI 设置 ---
 try:
-    ctypes.windll.shcore.SetProcessDpiAwareness(2)
+    ctypes.windll.shcore.SetProcessDpiAwareness(2)  # PROCESS_PER_MONITOR_DPI_AWARE
 except:
     try:
         ctypes.windll.user32.SetProcessDPIAware()
@@ -25,16 +25,66 @@ except:
         pass
 
 
-def get_dpi_scale():
-    """获取Windows DPI缩放比例"""
+def get_dpi_info():
+    """
+    获取详细的 DPI 信息和屏幕分辨率
+    
+    返回:
+        dict: {
+            'scale': DPI 缩放比例,
+            'dpi': 实际 DPI 值,
+            'screen_size': (宽, 高) 屏幕分辨率,
+            'logical_size': (宽, 高) 逻辑分辨率
+        }
+    """
     try:
-        hdc = ctypes.windll.user32.GetDC(0)
-        dpi = ctypes.windll.gdi32.GetDeviceCaps(hdc, 88)
-        ctypes.windll.user32.ReleaseDC(0, hdc)
-        scale = dpi / 96.0
-        return scale
-    except:
-        return 1.0
+        user32 = ctypes.windll.user32
+        gdi32 = ctypes.windll.gdi32
+        
+        # 获取主显示器句柄
+        hdc = user32.GetDC(0)
+        
+        # 获取 DPI
+        dpi_x = gdi32.GetDeviceCaps(hdc, 88)  # LOGPIXELSX
+        dpi_y = gdi32.GetDeviceCaps(hdc, 90)  # LOGPIXELSY
+        
+        # 释放 DC
+        user32.ReleaseDC(0, hdc)
+        
+        # 计算缩放比例（96 DPI = 100%）
+        scale_x = dpi_x / 96.0
+        scale_y = dpi_y / 96.0
+        
+        # 获取屏幕分辨率
+        # SM_CXSCREEN 和 SM_CYSCREEN 返回值取决于 DPI 感知模式
+        screen_w = user32.GetSystemMetrics(0)
+        screen_h = user32.GetSystemMetrics(1)
+        
+        # 尝试获取真实物理分辨率
+        try:
+            import pyautogui
+            logical_w, logical_h = pyautogui.size()
+        except:
+            logical_w, logical_h = screen_w, screen_h
+        
+        return {
+            'scale': (scale_x + scale_y) / 2,
+            'scale_x': scale_x,
+            'scale_y': scale_y,
+            'dpi': dpi_x,
+            'screen_size': (screen_w, screen_h),
+            'logical_size': (logical_w, logical_h)
+        }
+    except Exception as e:
+        print(f"获取 DPI 信息失败: {e}")
+        return {
+            'scale': 1.0,
+            'scale_x': 1.0,
+            'scale_y': 1.0,
+            'dpi': 96,
+            'screen_size': (1920, 1080),
+            'logical_size': (1920, 1080)
+        }
 
 
 def human_delay(base_delay, randomness=0.3):
@@ -115,47 +165,96 @@ def calibrate_and_activate(img_w, img_h):
     
     print(f"已记录 [右下角] 坐标: {bottom_right}")
     
+    # 获取系统信息（在等待前显示，方便调试）
+    dpi_info = get_dpi_info()
+    
+    print(f"\n" + "="*60)
+    print(f"系统显示信息:")
+    print(f"  当前屏幕分辨率: {dpi_info['screen_size'][0]} x {dpi_info['screen_size'][1]} 像素")
+    if dpi_info['logical_size'] != dpi_info['screen_size']:
+        print(f"  逻辑分辨率: {dpi_info['logical_size'][0]} x {dpi_info['logical_size'][1]} 像素")
+    print(f"  当前 DPI 缩放: {dpi_info['scale'] * 100:.0f}% (DPI: {dpi_info['dpi']})")
+    print(f"  原始图像尺寸: {img_w} x {img_h} 像素")
+    print(f"="*60)
+    
     print("\n等待 3 秒后开始绘画...")
     time.sleep(3)
-
-    dpi_scale = get_dpi_scale()
-    if dpi_scale != 1.0:
-        print(f"检测到显示缩放: {dpi_scale * 100:.0f}% (DPI: {dpi_scale * 96:.0f})")
     
+    # 计算画布尺寸（使用 pynput 获取的物理坐标）
     screen_x, screen_y = top_left[0], top_left[1]
-    screen_w, screen_h = bottom_right[0] - screen_x, bottom_right[1] - screen_y
+    bottom_x, bottom_y = bottom_right[0], bottom_right[1]
+    screen_w = bottom_x - screen_x
+    screen_h = bottom_y - screen_y
+    
+    print(f"\n画布校准结果:")
+    print(f"  画布左上角: ({screen_x}, {screen_y})")
+    print(f"  画布右下角: ({bottom_x}, {bottom_y})")
+    print(f"  画布尺寸: {screen_w} x {screen_h} 像素")
     
     if screen_w <= 0 or screen_h <= 0:
         print("错误: 坐标无效。")
         return None, None, None, None, None, None, None, None, None
 
+    # 计算等比例缩放（保持宽高比）
+    # 使用 min 策略：图片完全适合画布（不裁切、不变形）
     scale_x = screen_w / img_w
     scale_y = screen_h / img_h
-    scale_factor = min(scale_x, scale_y)
+    scale_factor = min(scale_x, scale_y)  # 取较小值，确保图片完全在画布内
     
+    # 缩放后的实际尺寸
     actual_w = img_w * scale_factor
     actual_h = img_h * scale_factor
     
+    # 居中对齐：计算偏移量使图像在画布中居中
     offset_x = screen_x + (screen_w - actual_w) / 2
     offset_y = screen_y + (screen_h - actual_h) / 2
     
+    # 安全绘制范围
     safe_x_min = int(offset_x)
     safe_x_max = int(offset_x + actual_w)
     safe_y_min = int(offset_y)
     safe_y_max = int(offset_y + actual_h)
     
-    print(f"画布校准完成:")
-    print(f"  选定区域: {screen_w}x{screen_h} 像素")
-    print(f"  图像尺寸: {img_w}x{img_h} 像素")
-    print(f"  缩放比例: {scale_factor:.3f}")
-    print(f"  实际绘制: {actual_w:.0f}x{actual_h:.0f} 像素")
-    print(f"  绘制范围: ({safe_x_min}, {safe_y_min}) -> ({safe_x_max}, {safe_y_max})")
+    print(f"\n绘画参数计算:")
+    print(f"  图像原始尺寸: {img_w} x {img_h} 像素")
+    print(f"  画布可用尺寸: {screen_w} x {screen_h} 像素")
+    print(f"  X轴缩放比例: {scale_x:.4f}")
+    print(f"  Y轴缩放比例: {scale_y:.4f}")
+    print(f"  最终缩放比例: {scale_factor:.4f} (取较小值保持比例)")
+    print(f"  缩放后图像: {actual_w:.1f} x {actual_h:.1f} 像素")
+    print(f"  居中偏移: X={((screen_w - actual_w) / 2):.1f}, Y={((screen_h - actual_h) / 2):.1f}")
+    print(f"  绘制区域: ({safe_x_min}, {safe_y_min}) → ({safe_x_max}, {safe_y_max})")
     
-    test_x = int(screen_x + screen_w / 2)
-    test_y = int(screen_y + screen_h / 2)
-    print(f"  测试: 点击画布中心 ({test_x}, {test_y})")
+    # 检查画布利用率
+    canvas_usage = (actual_w * actual_h) / (screen_w * screen_h) * 100
+    print(f"  画布利用率: {canvas_usage:.1f}%")
+    
+    # 分析利用率低的原因
+    if canvas_usage < 80:
+        aspect_img = img_w / img_h
+        aspect_canvas = screen_w / screen_h
+        if abs(aspect_img - aspect_canvas) > 0.2:
+            print(f"  💡 提示: 图片宽高比 ({aspect_img:.2f}) 与画布 ({aspect_canvas:.2f}) 差异较大")
+            if aspect_img > aspect_canvas:
+                print(f"     图片更宽，建议裁剪图片为更接近 {aspect_canvas:.1f}:1 的比例")
+            else:
+                print(f"     图片更高，建议裁剪图片为更接近 {aspect_canvas:.1f}:1 的比例")
+    
+    # 小画布精度警告
+    if scale_factor < 0.5:
+        print(f"\n⚠️ 警告: 缩放比例过小 ({scale_factor:.3f})")
+        print(f"   可能导致绘画精度降低")
+        print(f"   建议: 1) 使用更大的画布  2) 缩小图片尺寸")
+    
+    # 测试点击：点击图像中心
+    test_x = int(offset_x + actual_w / 2)
+    test_y = int(offset_y + actual_h / 2)
+    print(f"\n测试: 点击图像中心 ({test_x}, {test_y})")
     pydirectinput.click(test_x, test_y)
     time.sleep(0.5)
+    
+    print(f"\n提示: 按 Q 键可随时退出绘画")
+    print(f"=" * 60)
     
     return screen_x, screen_y, scale_factor, offset_x, offset_y, safe_x_min, safe_x_max, safe_y_min, safe_y_max
 
@@ -268,7 +367,7 @@ def start_drawing_method_2(app, contours, img_w, img_h, min_drag_dist, draw_dela
         app.on_drawing_complete()
 
 
-def start_drawing_method_3(app, contours, img_w, img_h, draw_delay, lift_pause, hand_shake, think_pause, speed_mult=1.0):
+def start_drawing_method_3(app, contours, img_w, img_h, draw_delay, lift_pause, hand_shake, think_pause, corner_sharpness=5, speed_mult=1.0):
     """方法3: 仿真人绘画 - 快速移动+停顿"""
     try:
         calib_data = calibrate_and_activate(img_w, img_h)
@@ -277,7 +376,7 @@ def start_drawing_method_3(app, contours, img_w, img_h, draw_delay, lift_pause, 
         screen_x, screen_y, scale_factor, offset_x, offset_y, safe_x_min, safe_x_max, safe_y_min, safe_y_max = calib_data
             
         print(f"\n--- 步骤 D: 开始模拟绘画 (方法 3: 仿真人绘画) ---")
-        print(f"   手部抖动: {hand_shake}px | 思考停顿: {think_pause}x | 速度倍率: {speed_mult:.1f}x")
+        print(f"   手部抖动: {hand_shake}px | 思考停顿: {think_pause}x | 转角锐利度: {corner_sharpness} | 速度倍率: {speed_mult:.1f}x")
         
         # 按轮廓面积排序 - 先画大轮廓（主体），再画小轮廓（细节）
         sorted_contours = sorted(contours, key=lambda c: cv2.contourArea(c), reverse=True)
@@ -327,29 +426,54 @@ def start_drawing_method_3(app, contours, img_w, img_h, draw_delay, lift_pause, 
                 angle_change = calculate_angle_change(last_point, point, 
                                                       path_points[min(i+1, len(path_points)-1)])
                 
-                # 关键改进：快速移动 + 移动后延迟，而非移动中延迟
-                # 这样可以保持线条平滑
-                current_time = time.time()
-                time_since_last = current_time - last_move_time
+                # 转角锐利度处理（核心逻辑改进）
+                # 原理：锐利度控制的是"转角停顿时间"，而非抬笔
+                # - 圆润（0-3）：快速连续移动，系统自动插值形成圆弧
+                # - 锐利（7-10）：转角处长时间停顿，形成明显的顿挫感
                 
-                # 确保移动间隔不要太密集（最少间隔）
-                min_interval = draw_delay * 0.3
-                if time_since_last < min_interval:
-                    time.sleep(min_interval - time_since_last)
+                is_corner = angle_change > 30  # 30度以上视为转角
                 
-                # 快速移动到目标点（不等待）
+                # 移动到目标点（始终保持按下状态，不抬笔）
                 pydirectinput.moveTo(target_x, target_y)
                 
-                # 移动后根据角度决定停顿时间
-                if angle_change < 20:  # 直线 - 短暂停顿
+                # 根据锐利度和角度计算停顿时间
+                if is_corner:
+                    # 转角处的停顿策略
+                    if corner_sharpness >= 8:
+                        # 极度锐利（8-10）：转角处明显停顿
+                        # 停顿时间与角度和锐利度成正比
+                        pause_multiplier = 2.0 + (corner_sharpness - 8) * 0.5
+                        if angle_change > 90:
+                            pause_multiplier *= 1.5  # 大角度额外增强
+                        human_delay(draw_delay * pause_multiplier)
+                        
+                        # 可选：急转弯额外思考
+                        if angle_change > 120 and random.random() < 0.3:
+                            human_delay(draw_delay * think_pause * 0.3)
+                    
+                    elif corner_sharpness >= 5:
+                        # 中度锐利（5-7）：适度停顿
+                        pause_multiplier = 1.0 + (corner_sharpness - 5) * 0.3
+                        if angle_change > 90:
+                            pause_multiplier *= 1.3
+                        human_delay(draw_delay * pause_multiplier)
+                    
+                    elif corner_sharpness >= 3:
+                        # 轻微锐利（3-4）：短暂停顿
+                        pause_multiplier = 0.6 + (corner_sharpness - 3) * 0.2
+                        if angle_change > 90:
+                            pause_multiplier *= 1.2
+                        human_delay(draw_delay * pause_multiplier)
+                    
+                    else:
+                        # 圆润（0-2）：几乎不停顿，快速过渡
+                        # 角度越大停顿越短（反直觉但符合圆润效果）
+                        pause_multiplier = 0.3 - corner_sharpness * 0.05
+                        human_delay(draw_delay * pause_multiplier)
+                
+                else:
+                    # 直线段：统一处理，锐利度不影响直线
                     human_delay(draw_delay * 0.3)
-                elif angle_change < 60:  # 缓和曲线 - 中等停顿
-                    human_delay(draw_delay * 0.6)
-                else:  # 急转弯 - 较长停顿
-                    human_delay(draw_delay * 1.2)
-                    # 复杂转角额外思考停顿
-                    if random.random() < 0.2:
-                        human_delay(draw_delay * think_pause * 0.5)
                 
                 last_move_time = time.time()
                 last_point = point
