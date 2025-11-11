@@ -94,8 +94,42 @@ def get_anime2sketch_model():
     # 尝试加载模型
     try:
         import os
-        # 模型路径：models/netG.pth
-        model_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), "models", "netG.pth")
+        # 模型路径：使用绝对路径，支持中文路径
+        script_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        model_path = os.path.join(script_dir, "models", "netG.pth")
+        
+        # 确保路径存在
+        if not os.path.exists(model_path):
+            # 尝试其他可能的路径
+            alternative_paths = [
+                os.path.join(os.getcwd(), "models", "netG.pth"),
+                os.path.join(script_dir, "netG.pth"),
+                "models/netG.pth",
+                "netG.pth"
+            ]
+            
+            for alt_path in alternative_paths:
+                if os.path.exists(alt_path):
+                    model_path = alt_path
+                    print(f"找到模型文件: {model_path}")
+                    break
+            else:
+                # 所有路径都不存在
+                print(f"=" * 60)
+                print(f"错误: 找不到 Anime2Sketch 模型文件")
+                print(f"尝试的路径:")
+                print(f"  1. {os.path.join(script_dir, 'models', 'netG.pth')}")
+                for i, p in enumerate(alternative_paths, 2):
+                    print(f"  {i}. {p}")
+                print(f"")
+                print(f"请下载模型文件:")
+                print(f"  下载地址: https://github.com/Mukosame/Anime2Sketch/releases/download/1.0/netG.pth")
+                print(f"  放置位置: {os.path.join(script_dir, 'models', 'netG.pth')}")
+                print(f"=" * 60)
+                anime2sketch_model = "error"
+                return None
+        
+        model_path = os.path.abspath(model_path)
         
         if not os.path.exists(model_path):
             print(f"错误: 找不到模型文件: {model_path}")
@@ -141,8 +175,13 @@ def get_anime2sketch_model():
 
 def load_image_with_unicode(file_path):
     """
-    支持 Unicode 路径的图片加载（包括中文、特殊字符等）
-    cv2.imread 对非 ASCII 路径支持不好，使用 numpy 和 cv2.imdecode 解决
+    支持 Unicode 路径的图片加载并自动调整到合理尺寸
+    
+    参数:
+        file_path: 图片路径（支持中文）
+    
+    返回:
+        image: BGR 图像数组，尺寸在 512-2048 像素范围内
     """
     try:
         # 使用 numpy 读取文件字节，然后用 cv2 解码
@@ -154,6 +193,37 @@ def load_image_with_unicode(file_path):
             print(f"错误: 无法解码图像文件: {file_path}")
             print(f"  请确认文件是有效的图片格式（jpg, png, bmp 等）")
             return None
+        
+        # 获取原始尺寸
+        h, w = image.shape[:2]
+        original_size = f"{w}x{h}"
+        
+        # 设置尺寸上限（防止内存溢出，但不做预缩放）
+        MAX_SIZE = 4096  # 提高上限，让画布校准时再决定缩放
+        MIN_SIZE = 256   # 降低下限，避免过度放大
+        
+        max_dim = max(h, w)
+        
+        # 只处理极端情况
+        if max_dim > MAX_SIZE:
+            # 图片极大：缩小到 MAX_SIZE（防止内存问题）
+            scale = MAX_SIZE / max_dim
+            new_w = int(w * scale)
+            new_h = int(h * scale)
+            image = cv2.resize(image, (new_w, new_h), interpolation=cv2.INTER_AREA)
+            print(f"图片过大，已预缩小: {original_size} → {new_w}x{new_h}")
+            print(f"  (将在绘画时根据画布大小进一步调整)")
+        
+        elif max_dim < MIN_SIZE:
+            # 图片极小：放大到 MIN_SIZE
+            scale = MIN_SIZE / max_dim
+            new_w = int(w * scale)
+            new_h = int(h * scale)
+            image = cv2.resize(image, (new_w, new_h), interpolation=cv2.INTER_LANCZOS4)
+            print(f"图片过小，已预放大: {original_size} → {new_w}x{new_h}")
+        
+        else:
+            print(f"图片尺寸: {original_size} (将根据画布大小自动调整)")
         
         return image
     except FileNotFoundError:
