@@ -5,6 +5,21 @@ Using CustomTkinter for modern UI
 
 import sys
 import os
+
+# 🔧 关键: 在导入任何GUI库之前设置DPI感知 (使用Per-Monitor V1)
+import ctypes
+try:
+    # Windows 8.1+ Per-Monitor DPI Aware (稳定可靠)
+    ctypes.windll.shcore.SetProcessDpiAwareness(2)
+    print("✓ DPI感知已启用 (Per-Monitor V1)")
+except:
+    # Fallback: Windows Vista+ System DPI Aware
+    try:
+        ctypes.windll.user32.SetProcessDPIAware()
+        print("✓ DPI感知已启用 (System DPI)")
+    except Exception as e:
+        print(f"⚠ DPI设置失败: {e}")
+
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), 'modules'))
 
 import customtkinter as ctk
